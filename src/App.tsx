@@ -747,67 +747,6 @@ export default function App() {
             <div className="flex flex-col gap-3 justify-center">
               <GsiButton onClick={handleLogin} isLoading={isLoggingIn} />
             </div>
-
-            {authError && (
-              <div id="auth-error-banner" className="bg-amber-950/25 border border-amber-900/40 rounded-2xl p-4 space-y-3.5 animate-fade-in text-left">
-                <div className="flex gap-2.5">
-                  <AlertCircle className="h-4.5 w-4.5 text-amber-500 shrink-0 mt-0.5" />
-                  <div className="space-y-1">
-                    <h4 className="text-xs font-bold text-amber-400">Google Authentication Blocked</h4>
-                    <p className="text-[11px] text-slate-350 leading-relaxed font-sans">
-                      {authError}
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Live 24/7 Production Setup & Bypass Credentials Restrictions */}
-            <div className="bg-[#11141A] border border-slate-800/80 rounded-2xl p-4 space-y-3.5 text-left">
-              <h4 className="text-xs font-black text-slate-300 uppercase tracking-widest flex items-center gap-2 pb-2 border-b border-slate-800/60">
-                <ShieldCheck className="h-3.5 w-3.5 text-indigo-400" />
-                Live 24/7 Deployment Setup
-              </h4>
-              <div className="space-y-3 text-[11px] text-slate-400 leading-relaxed font-sans">
-                <div>
-                  <h5 className="font-bold text-indigo-400 flex items-center gap-1.5">
-                    <span className="flex items-center justify-center w-3.5 h-3.5 rounded-full bg-indigo-950 text-[9px] font-mono border border-indigo-900/40">1</span>
-                    Unblock Google Login (Error 403)
-                  </h5>
-                  <p className="pl-5 mt-1">
-                    Your Firebase OAuth app restricts logins unless your email is explicitly registered as a Test User in the Google Cloud Console. To bypass this instantly:
-                  </p>
-                  <ol className="list-decimal pl-9 mt-1.5 space-y-1">
-                    <li>Log in to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:underline font-semibold cursor-pointer">Google Cloud Console</a>.</li>
-                    <li>Select the Google Project: <code className="bg-slate-900 text-slate-200 px-1 py-0.5 rounded font-mono">gen-lang-client-0473123354</code>.</li>
-                    <li>Navigate to <strong>APIs & Services</strong> &gt; <strong>OAuth consent screen</strong>.</li>
-                    <li>Find <strong>Test users</strong> section, click <strong>+ ADD USERS</strong> and register your email <code className="bg-slate-900 text-slate-200 px-1 py-0.5 rounded font-mono">prop.ai.business26@gmail.com</code> (then click Save).</li>
-                  </ol>
-                </div>
-
-                <div className="pt-2 border-t border-slate-800/45">
-                  <h5 className="font-semibold text-emerald-400 flex items-center gap-1.5">
-                    <span className="flex items-center justify-center w-3.5 h-3.5 rounded-full bg-emerald-950 text-[9px] font-mono border border-emerald-900/40">2</span>
-                    Automated 24/7 Ingestion Webhook
-                  </h5>
-                  <p className="pl-5 mt-1">
-                    To trigger replies continuously 24 hours a day, 7 days a week (completely offline, without having to keep this tab open), send any user lead directly to this live background listener URL:
-                  </p>
-                  <p className="pl-5 mt-1.5">
-                    <code className="bg-slate-950 border border-slate-800 text-slate-100 px-2 py-1 rounded font-mono block mt-1 select-all break-all text-[10px]">
-                      POST https://gen-lang-client-0473123354.firebaseapp.com/api/leads/incoming
-                    </code>
-                  </p>
-                  <p className="pl-5 mt-1 text-slate-500 font-mono text-[9px]">
-                    Supports JSON objects with: "name", "contact", "source" ("gmail" | "whatsapp"), and "message".
-                  </p>
-                </div>
-              </div>
-            </div>
-            
-            <p className="text-[10px] text-slate-500 text-center uppercase tracking-wide">
-              🔒 Powered by Google Workspace & Firebase Auth
-            </p>
           </div>
         </div>
       </div>
