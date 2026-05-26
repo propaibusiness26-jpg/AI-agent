@@ -1,0 +1,6 @@
+{
+  "name": "Lead Follow-up AI Agent",
+  "description": "An autonomous AI dashboard to connect Gmail and WhatsApp, scan for leads, and automatically draft or reply to inquirers using Gemini.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

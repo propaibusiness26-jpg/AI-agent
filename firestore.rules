@@ -1,0 +1,88 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Primitive Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(ownerId) {
+      return isSignedIn() && request.auth.uid == ownerId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Entity validation helpers
+    function isValidLead(data) {
+      return data.id is string
+        && data.source in ['gmail', 'whatsapp']
+        && data.name is string && data.name.size() <= 200
+        && data.contact is string && data.contact.size() <= 200
+        && data.status in ['new', 'replied', 'converted', 'ignored']
+        && data.lastMessage is string && data.lastMessage.size() <= 10000
+        && (!data.keys().hasAll(['aiResponse']) || (data.aiResponse is string && data.aiResponse.size() <= 20000))
+        && data.ownerId == request.auth.uid;
+    }
+
+    function isValidLog(data) {
+      return data.id is string
+        && data.leadId is string
+        && data.contact is string && data.contact.size() <= 200
+        && data.channel in ['gmail', 'whatsapp']
+        && data.status in ['success', 'pending', 'failed']
+        && data.message is string && data.message.size() <= 20000
+        && data.ownerId == request.auth.uid;
+    }
+
+    function isValidSetting(data) {
+      return data.id is string
+        && data.companyName is string && data.companyName.size() <= 200
+        && data.companyDescription is string && data.companyDescription.size() <= 5000
+        && data.agentTone in ['professional', 'friendly', 'persuasive', 'direct']
+        && data.gmailAutomationToggle is bool
+        && data.whatsappAutomationToggle is bool
+        && data.gmailAutoSend is bool
+        && data.whatsappAutoSend is bool
+        && data.ownerId == request.auth.uid;
+    }
+
+    // Matches
+    match /leads/{leadId} {
+      allow get: if isOwner(existing().ownerId);
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(leadId) && incoming().id == leadId && isValidLead(incoming()) && incoming().createdAt == request.time && incoming().updatedAt == request.time;
+      allow update: if isOwner(existing().ownerId) && isValidLead(incoming()) && incoming().updatedAt == request.time && incoming().createdAt == existing().createdAt && incoming().id == existing().id;
+      allow delete: if isOwner(existing().ownerId);
+    }
+
+    match /logs/{logId} {
+      allow get: if isOwner(existing().ownerId);
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(logId) && incoming().id == logId && isValidLog(incoming()) && incoming().timestamp == request.time;
+      allow update, delete: if false; // Logs are immutable
+    }
+
+    match /settings/{settingId} {
+      allow get: if isOwner(existing().ownerId);
+      allow list: if isSignedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(settingId) && incoming().id == settingId && isValidSetting(incoming());
+      allow update: if isOwner(existing().ownerId) && isValidSetting(incoming()) && incoming().id == existing().id;
+      allow delete: if isOwner(existing().ownerId);
+    }
+  }
+}
