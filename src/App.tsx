@@ -151,7 +151,11 @@ export default function App() {
           }
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('Leads channel error - realtime may not be enabled');
+        }
+      });
 
     const logsChannel = supabase
       .channel('logs-changes')
@@ -167,61 +171,75 @@ export default function App() {
           setLogs(prev => [payload.new as Log, ...prev]);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'CHANNEL_ERROR') {
+          console.error('Logs channel error - realtime may not be enabled');
+        }
+      });
 
     // Fetch initial data
     const fetchData = async () => {
-      const { data: leadsData } = await supabase
-        .from('leads')
-        .select('*')
-        .eq('owner_id', currentUser.id)
-        .order('created_at', { ascending: false });
+      try {
+        const { data: leadsData, error: leadsError } = await supabase
+          .from('leads')
+          .select('*')
+          .eq('owner_id', currentUser.id)
+          .order('created_at', { ascending: false });
 
-      if (leadsData) {
-        setLeads(leadsData.map(l => ({
-          ...l,
-          lastMessage: l.last_message,
-          aiResponse: l.ai_response,
-          createdAt: l.created_at,
-          updatedAt: l.updated_at,
-          ownerId: l.owner_id
-        })) as Lead[]);
-      }
+        if (leadsError) {
+          console.error('Error fetching leads:', leadsError);
+        } else if (leadsData) {
+          setLeads(leadsData.map(l => ({
+            ...l,
+            lastMessage: l.last_message,
+            aiResponse: l.ai_response,
+            createdAt: l.created_at,
+            updatedAt: l.updated_at,
+            ownerId: l.owner_id
+          })) as Lead[]);
+        }
 
-      const { data: logsData } = await supabase
-        .from('logs')
-        .select('*')
-        .eq('owner_id', currentUser.id)
-        .order('timestamp', { ascending: false });
+        const { data: logsData, error: logsError } = await supabase
+          .from('logs')
+          .select('*')
+          .eq('owner_id', currentUser.id)
+          .order('timestamp', { ascending: false });
 
-      if (logsData) {
-        setLogs(logsData.map(l => ({
-          ...l,
-          leadId: l.lead_id,
-          ownerId: l.owner_id
-        })) as Log[]);
-      }
+        if (logsError) {
+          console.error('Error fetching logs:', logsError);
+        } else if (logsData) {
+          setLogs(logsData.map(l => ({
+            ...l,
+            leadId: l.lead_id,
+            ownerId: l.owner_id
+          })) as Log[]);
+        }
 
-      const { data: settingsData } = await supabase
-        .from('settings')
-        .select('*')
-        .eq('owner_id', currentUser.id)
-        .maybeSingle();
+        const { data: settingsData, error: settingsError } = await supabase
+          .from('settings')
+          .select('*')
+          .eq('owner_id', currentUser.id)
+          .maybeSingle();
 
-      if (settingsData) {
-        setSettings({
-          ...settingsData,
-          companyName: settingsData.company_name,
-          companyDescription: settingsData.company_description,
-          agentTone: settingsData.agent_tone,
-          gmailAutomationToggle: settingsData.gmail_automation_toggle,
-          whatsappAutomationToggle: settingsData.whatsapp_automation_toggle,
-          gmailAutoSend: settingsData.gmail_auto_send,
-          whatsappAutoSend: settingsData.whatsapp_auto_send,
-          ownerId: settingsData.owner_id,
-          createdAt: settingsData.created_at,
-          updatedAt: settingsData.updated_at
-        } as Setting);
+        if (settingsError) {
+          console.error('Error fetching settings:', settingsError);
+        } else if (settingsData) {
+          setSettings({
+            ...settingsData,
+            companyName: settingsData.company_name,
+            companyDescription: settingsData.company_description,
+            agentTone: settingsData.agent_tone,
+            gmailAutomationToggle: settingsData.gmail_automation_toggle,
+            whatsappAutomationToggle: settingsData.whatsapp_automation_toggle,
+            gmailAutoSend: settingsData.gmail_auto_send,
+            whatsappAutoSend: settingsData.whatsapp_auto_send,
+            ownerId: settingsData.owner_id,
+            createdAt: settingsData.created_at,
+            updatedAt: settingsData.updated_at
+          } as Setting);
+        }
+      } catch (err) {
+        console.error('Unexpected error fetching data:', err);
       }
     };
 
