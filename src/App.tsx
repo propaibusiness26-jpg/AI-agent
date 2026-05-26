@@ -1,22 +1,7 @@
 import React, { useState, useEffect } from "react";
-import { User } from "firebase/auth";
-import { 
-  db, 
-  auth, 
-  initAuth, 
-  googleSignIn, 
-  logout, 
-  handleFirestoreError, 
-  OperationType,
-  collection,
-  doc,
-  setDoc,
-  deleteDoc,
-  onSnapshot,
-  query,
-  where,
-  getAccessToken
-} from "./firebase";
+import { User, Session } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
+import { signInWithGoogle, signOut, onAuthStateChange, getAccessToken } from "./lib/auth";
 import { Lead, Log, Setting } from "./types";
 
 // Component imports
@@ -27,36 +12,21 @@ import SettingsPanel from "./components/SettingsPanel";
 import SimulatorPanel from "./components/SimulatorPanel";
 import ActivityLog from "./components/ActivityLog";
 
-// Icons 
-import { 
-  Sparkles, 
-  BarChart, 
-  Mail, 
-  MessageSquare, 
-  Bot, 
-  Users, 
-  ShieldCheck, 
-  LogOut, 
-  RefreshCw,
-  Clock,
-  Settings,
-  Grid,
-  AlertCircle,
-  ExternalLink
-} from "lucide-react";
+// Icons
+import { Sparkles, ChartBar as BarChart, Mail, MessageSquare, Bot, Users, ShieldCheck, LogOut, RefreshCw, Clock, Settings, Grid2x2 as Grid, CircleAlert as AlertCircle, ExternalLink } from "lucide-react";
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [needsAuth, setNeedsAuth] = useState(true);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
-  
+
   const [leads, setLeads] = useState<Lead[]>([]);
   const [logs, setLogs] = useState<Log[]>([]);
   const [settings, setSettings] = useState<Setting | null>(null);
 
   const [activeTab, setActiveTab] = useState<"dashboard" | "leads" | "simulator" | "settings">("dashboard");
-  
+
   const [isScanningGmail, setIsScanningGmail] = useState(false);
   const [isSimulatingLead, setIsSimulatingLead] = useState(false);
   const [refreshingLeadId, setRefreshingLeadId] = useState<string | null>(null);
@@ -68,27 +38,22 @@ export default function App() {
     setTimeout(() => setNotification(null), 5000);
   };
 
-  // Auth initiation listener on boot
+  // Auth state listener
   useEffect(() => {
-    const unsubscribe = initAuth(
-      (user, token) => {
-        setCurrentUser(user);
-        setNeedsAuth(false);
-      },
-      () => {
-        setNeedsAuth(true);
-        setCurrentUser(null);
-      }
-    );
-    return () => unsubscribe();
+    const { data: { subscription } } = onAuthStateChange((user, session) => {
+      setCurrentUser(user);
+      setNeedsAuth(!user);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
-  // Sync data streams from Firestore upon authenticate
+  // Sync data from Supabase
   useEffect(() => {
     if (!currentUser) return;
 
-    if (currentUser.uid === "demo-user") {
-      // Load from localStorage or defaults
+    // Demo mode
+    if (currentUser.id === "demo-user") {
       const savedSettings = localStorage.getItem("lead_agent_demo_settings");
       if (savedSettings) {
         setSettings(JSON.parse(savedSettings));
@@ -165,102 +130,119 @@ export default function App() {
       return;
     }
 
-    // Under secure rule: lists filtered strictly by ownerId
-    const leadsQuery = query(collection(db, "leads"), where("ownerId", "==", currentUser.uid));
-    const unsubscribeLeads = onSnapshot(
-      leadsQuery,
-      (snapshot) => {
-        const list: Lead[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as Lead);
-        });
-        setLeads(list);
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, "leads");
-      }
-    );
-
-    const logsQuery = query(collection(db, "logs"), where("ownerId", "==", currentUser.uid));
-    const unsubscribeLogs = onSnapshot(
-      logsQuery,
-      (snapshot) => {
-        const list: Log[] = [];
-        snapshot.forEach((doc) => {
-          list.push(doc.data() as Log);
-        });
-        setLogs(list);
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.LIST, "logs");
-      }
-    );
-
-    // Sync settings or set default blueprint configuration
-    const settingsDocRef = doc(db, "settings", currentUser.uid);
-    const unsubscribeSettings = onSnapshot(
-      settingsDocRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          setSettings(snapshot.data() as Setting);
-        } else {
-          const defaultSettings: Setting = {
-            id: currentUser.uid,
-            companyName: "Solopreneur Consulting LLC",
-            companyDescription: "We specialize in tailored software engineering, custom Shopify setups, and business automation pipelines. Our consulting programs start at $1500 per month.",
-            agentTone: "friendly",
-            gmailAutomationToggle: true,
-            whatsappAutomationToggle: true,
-            gmailAutoSend: false,
-            whatsappAutoSend: false,
-            ownerId: currentUser.uid,
-          };
-          setDoc(settingsDocRef, defaultSettings).catch((err) => {
-            handleFirestoreError(err, OperationType.WRITE, `settings/${currentUser.uid}`);
-          });
+    // Real Supabase subscriptions
+    const leadsChannel = supabase
+      .channel('leads-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'leads',
+          filter: `owner_id=eq.${currentUser.id}`
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            setLeads(prev => [payload.new as Lead, ...prev]);
+          } else if (payload.eventType === 'UPDATE') {
+            setLeads(prev => prev.map(l => l.id === payload.new.id ? payload.new as Lead : l));
+          } else if (payload.eventType === 'DELETE') {
+            setLeads(prev => prev.filter(l => l.id !== payload.old.id));
+          }
         }
-      },
-      (error) => {
-        handleFirestoreError(error, OperationType.GET, `settings/${currentUser.uid}`);
+      )
+      .subscribe();
+
+    const logsChannel = supabase
+      .channel('logs-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'logs',
+          filter: `owner_id=eq.${currentUser.id}`
+        },
+        (payload) => {
+          setLogs(prev => [payload.new as Log, ...prev]);
+        }
+      )
+      .subscribe();
+
+    // Fetch initial data
+    const fetchData = async () => {
+      const { data: leadsData } = await supabase
+        .from('leads')
+        .select('*')
+        .eq('owner_id', currentUser.id)
+        .order('created_at', { ascending: false });
+
+      if (leadsData) {
+        setLeads(leadsData.map(l => ({
+          ...l,
+          lastMessage: l.last_message,
+          aiResponse: l.ai_response,
+          createdAt: l.created_at,
+          updatedAt: l.updated_at,
+          ownerId: l.owner_id
+        })) as Lead[]);
       }
-    );
+
+      const { data: logsData } = await supabase
+        .from('logs')
+        .select('*')
+        .eq('owner_id', currentUser.id)
+        .order('timestamp', { ascending: false });
+
+      if (logsData) {
+        setLogs(logsData.map(l => ({
+          ...l,
+          leadId: l.lead_id,
+          ownerId: l.owner_id
+        })) as Log[]);
+      }
+
+      const { data: settingsData } = await supabase
+        .from('settings')
+        .select('*')
+        .eq('owner_id', currentUser.id)
+        .maybeSingle();
+
+      if (settingsData) {
+        setSettings({
+          ...settingsData,
+          companyName: settingsData.company_name,
+          companyDescription: settingsData.company_description,
+          agentTone: settingsData.agent_tone,
+          gmailAutomationToggle: settingsData.gmail_automation_toggle,
+          whatsappAutomationToggle: settingsData.whatsapp_automation_toggle,
+          gmailAutoSend: settingsData.gmail_auto_send,
+          whatsappAutoSend: settingsData.whatsapp_auto_send,
+          ownerId: settingsData.owner_id,
+          createdAt: settingsData.created_at,
+          updatedAt: settingsData.updated_at
+        } as Setting);
+      }
+    };
+
+    fetchData();
 
     return () => {
-      unsubscribeLeads();
-      unsubscribeLogs();
-      unsubscribeSettings();
+      leadsChannel.unsubscribe();
+      logsChannel.unsubscribe();
     };
   }, [currentUser]);
 
-  // Auth handles
+  // Auth handlers
   const handleLogin = async () => {
     setIsLoggingIn(true);
     setAuthError(null);
     try {
-      const result = await googleSignIn();
-      if (result) {
-        setCurrentUser(result.user);
-        setNeedsAuth(false);
-        showNotification(`Welcome back, ${result.user.displayName || "Client"}! Workspace enabled.`);
-      }
+      await signInWithGoogle();
+      // OAuth redirect will handle the rest
     } catch (err: any) {
       console.error(err);
-      const isPopupClosed = err?.code === "auth/popup-closed-by-user" || err?.message?.includes("popup-closed-by-user") || err?.message?.includes("closed by the user");
-      const isPopupBlocked = err?.code === "auth/popup-blocked" || err?.message?.includes("popup-blocked");
-      
-      if (isPopupClosed) {
-        setAuthError(
-          "The Google sign-in window was closed or blocked. Because the application is running in an embedded preview iframe, your browser automatically restricts authentication popups. For a smooth, error-free setup, please run this app in a separate standalone tab!"
-        );
-      } else if (isPopupBlocked) {
-        setAuthError(
-          "Your browser is actively blocking the Google Authentication popup. Please check your browser's address bar to allow popups, or open the app in a new tab."
-        );
-      } else {
-        setAuthError(
-          `Google Authentication failed: ${err.message || err}. We strongly recommend opening this application in a Standalone tab to prevent sandbox iframe conflicts.`
-        );
-      }
+      setAuthError(`Google Authentication failed: ${err.message || err}. Please try again.`);
     } finally {
       setIsLoggingIn(false);
     }
@@ -268,19 +250,18 @@ export default function App() {
 
   const handleEnterDemoMode = () => {
     const demoUser = {
-      uid: "demo-user",
-      displayName: "Apex Entrepreneur",
+      id: "demo-user",
       email: "demo@example.com",
     } as User;
     setCurrentUser(demoUser);
     setNeedsAuth(false);
-    showNotification("Launched in Local Sandbox Mode! Firestore & Workspace connections are simulated.");
+    showNotification("Launched in Local Sandbox Mode! Database connections are simulated.");
   };
 
   const handleLogout = async () => {
     try {
-      if (currentUser?.uid !== "demo-user") {
-        await logout();
+      if (currentUser?.id !== "demo-user") {
+        await signOut();
       }
       setCurrentUser(null);
       setNeedsAuth(true);
@@ -293,7 +274,6 @@ export default function App() {
     }
   };
 
-  // call the server-side Gemini generation proxy
   const fetchAIResponse = async (messageText: string, name: string): Promise<string> => {
     try {
       const response = await fetch("/api/generate-response", {
@@ -320,7 +300,6 @@ export default function App() {
     }
   };
 
-  // Simulated outbound dispatch trigger (mock integrations success)
   const handleApproveSend = async (lead: Lead, customMessage: string) => {
     if (!currentUser) return;
     try {
@@ -331,8 +310,8 @@ export default function App() {
         status: "replied",
         updatedAt: timestampStr
       };
-      
-      if (currentUser.uid === "demo-user") {
+
+      if (currentUser.id === "demo-user") {
         const nextLeads = leads.map(l => l.id === lead.id ? updatedLead : l);
         setLeads(nextLeads);
         localStorage.setItem("lead_agent_demo_leads", JSON.stringify(nextLeads));
@@ -346,7 +325,7 @@ export default function App() {
           status: "success",
           message: customMessage,
           timestamp: timestampStr,
-          ownerId: currentUser.uid
+          ownerId: currentUser.id
         };
         const nextLogs = [successLog, ...logs];
         setLogs(nextLogs);
@@ -354,29 +333,34 @@ export default function App() {
         showNotification(`AI Reply dispatched successfully to ${lead.name}!`);
         return;
       }
-      
-      await setDoc(doc(db, "leads", lead.id), updatedLead);
 
-      // Create success log item
+      await supabase
+        .from('leads')
+        .update({
+          ai_response: customMessage,
+          status: 'replied',
+          updated_at: timestampStr
+        })
+        .eq('id', lead.id);
+
       const logId = `log-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-      const successLog: Log = {
+      await supabase.from('logs').insert({
         id: logId,
-        leadId: lead.id,
+        lead_id: lead.id,
         contact: lead.contact,
         channel: lead.source,
-        status: "success",
+        status: 'success',
         message: customMessage,
-        timestamp: timestampStr,
-        ownerId: currentUser.uid
-      };
-      await setDoc(doc(db, "logs", logId), successLog);
+        owner_id: currentUser.id,
+        timestamp: timestampStr
+      });
+
       showNotification(`AI Reply dispatched successfully to ${lead.name}!`);
     } catch (err) {
       console.error(err);
     }
   };
 
-  // AI draft regeneration trigger
   const handleRegenerate = async (lead: Lead) => {
     setRefreshingLeadId(lead.id);
     try {
@@ -386,14 +370,23 @@ export default function App() {
         aiResponse: newResponse,
         updatedAt: new Date().toISOString()
       };
-      if (currentUser.uid === "demo-user") {
+
+      if (currentUser?.id === "demo-user") {
         const nextLeads = leads.map(l => l.id === lead.id ? updatedLead : l);
         setLeads(nextLeads);
         localStorage.setItem("lead_agent_demo_leads", JSON.stringify(nextLeads));
         showNotification("Regenerated optimized reply option with Gemini.");
         return;
       }
-      await setDoc(doc(db, "leads", lead.id), updatedLead);
+
+      await supabase
+        .from('leads')
+        .update({
+          ai_response: newResponse,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', lead.id);
+
       showNotification("Regenerated optimized reply option with Gemini.");
     } catch (err) {
       console.error(err);
@@ -402,7 +395,6 @@ export default function App() {
     }
   };
 
-  // Snooze action
   const handleIgnore = async (lead: Lead) => {
     try {
       const updatedLead: Lead = {
@@ -410,73 +402,75 @@ export default function App() {
         status: "ignored",
         updatedAt: new Date().toISOString()
       };
-      if (currentUser.uid === "demo-user") {
+
+      if (currentUser?.id === "demo-user") {
         const nextLeads = leads.map(l => l.id === lead.id ? updatedLead : l);
         setLeads(nextLeads);
         localStorage.setItem("lead_agent_demo_leads", JSON.stringify(nextLeads));
         showNotification("Lead snoozed catalogued successfully.");
         return;
       }
-      await setDoc(doc(db, "leads", lead.id), updatedLead);
+
+      await supabase
+        .from('leads')
+        .update({
+          status: 'ignored',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', lead.id);
+
       showNotification("Lead snoozed catalogued successfully.");
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Trash lead action
   const handleDeleteLead = async (lead: Lead) => {
     const confirmed = window.confirm(`Remove prospect record "${lead.name}" permanently from the database?`);
     if (!confirmed) return;
     try {
-      if (currentUser.uid === "demo-user") {
+      if (currentUser?.id === "demo-user") {
         const nextLeads = leads.filter(l => l.id !== lead.id);
         setLeads(nextLeads);
         localStorage.setItem("lead_agent_demo_leads", JSON.stringify(nextLeads));
         showNotification("Prospect record deleted.");
         return;
       }
-      await deleteDoc(doc(db, "leads", lead.id));
+
+      await supabase.from('leads').delete().eq('id', lead.id);
       showNotification("Prospect record deleted.");
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Clear Audit trails
   const handleClearLogs = async () => {
     const confirmed = window.confirm("Clear action logs? This does not alter prospect categories.");
     if (!confirmed) return;
     try {
-      if (currentUser.uid === "demo-user") {
+      if (currentUser?.id === "demo-user") {
         setLogs([]);
         localStorage.removeItem("lead_agent_demo_logs");
         showNotification("Logs cleared safely.");
         return;
       }
-      for (const log of logs) {
-        await deleteDoc(doc(db, "logs", log.id));
-      }
+
+      await supabase.from('logs').delete().eq('owner_id', currentUser?.id);
       showNotification("Logs cleared safely.");
     } catch (err) {
       console.error(err);
     }
   };
 
-  // Inbound simulation engine
   const handleSimulateLead = async (source: "gmail" | "whatsapp", name: string, contact: string, message: string) => {
     if (!currentUser) return;
     setIsSimulatingLead(true);
     try {
       const leadId = `sim-${Date.now()}`;
-      
-      // Determine if automation toggle permits direct AI autoreply
       const autoSendEngaged = source === "gmail" ? (settings?.gmailAutomationToggle && settings?.gmailAutoSend) : (settings?.whatsappAutomationToggle && settings?.whatsappAutoSend);
-      
-      // AI generates response template
       const aiReply = await fetchAIResponse(message, name);
-      
       const timestampStr = new Date().toISOString();
+
       const newLead: Lead = {
         id: leadId,
         source,
@@ -487,10 +481,10 @@ export default function App() {
         aiResponse: aiReply,
         createdAt: timestampStr,
         updatedAt: timestampStr,
-        ownerId: currentUser.uid
+        ownerId: currentUser.id
       };
 
-      if (currentUser.uid === "demo-user") {
+      if (currentUser.id === "demo-user") {
         const nextLeads = [newLead, ...leads];
         setLeads(nextLeads);
         localStorage.setItem("lead_agent_demo_leads", JSON.stringify(nextLeads));
@@ -498,13 +492,13 @@ export default function App() {
         const logId = `log-${Date.now()}`;
         const newLog: Log = {
           id: logId,
-          leadId,
+          leadId: leadId,
           contact,
           channel: source,
           status: autoSendEngaged ? "success" : "pending",
           message: aiReply,
           timestamp: timestampStr,
-          ownerId: currentUser.uid
+          ownerId: currentUser.id
         };
         const nextLogs = [newLog, ...logs];
         setLogs(nextLogs);
@@ -513,21 +507,29 @@ export default function App() {
         return;
       }
 
-      await setDoc(doc(db, "leads", leadId), newLead);
+      await supabase.from('leads').insert({
+        id: leadId,
+        source,
+        name,
+        contact,
+        status: autoSendEngaged ? 'replied' : 'new',
+        last_message: message,
+        ai_response: aiReply,
+        owner_id: currentUser.id
+      });
 
       const logId = `log-${Date.now()}`;
-      const newLog: Log = {
+      await supabase.from('logs').insert({
         id: logId,
-        leadId,
+        lead_id: leadId,
         contact,
         channel: source,
-        status: autoSendEngaged ? "success" : "pending",
+        status: autoSendEngaged ? 'success' : 'pending',
         message: aiReply,
-        timestamp: timestampStr,
-        ownerId: currentUser.uid
-      };
-      await setDoc(doc(db, "logs", logId), newLog);
-      
+        owner_id: currentUser.id
+      });
+
+      showNotification(`Simulated inbound lead from ${name}!`);
     } catch (err) {
       console.error(err);
     } finally {
@@ -535,14 +537,13 @@ export default function App() {
     }
   };
 
-  // Real Workspace unread Gmail scan mechanism
   const scanGmailInbox = async () => {
     if (!currentUser) return;
     setIsScanningGmail(true);
     try {
-      if (currentUser.uid === "demo-user") {
+      if (currentUser.id === "demo-user") {
         await new Promise(resolve => setTimeout(resolve, 800));
-        
+
         const demoPool = [
           {
             name: "Sophia Lopez",
@@ -561,7 +562,6 @@ export default function App() {
           }
         ];
 
-        // Pick one that is not already captured
         const available = demoPool.filter(p => !leads.some(l => l.contact === p.contact));
         if (available.length === 0) {
           showNotification("Workspace checked: No new unread business mails in Inbox.");
@@ -586,19 +586,19 @@ export default function App() {
           aiResponse: aiDraft,
           createdAt: timestampStr,
           updatedAt: timestampStr,
-          ownerId: currentUser.uid
+          ownerId: currentUser.id
         };
 
         const logId = `log-g-${Date.now()}`;
         const autoLog: Log = {
           id: logId,
-          leadId,
+          leadId: leadId,
           contact: picked.contact,
           channel: "gmail",
           status: autoSendActive ? "success" : "pending",
           message: aiDraft,
           timestamp: timestampStr,
-          ownerId: currentUser.uid
+          ownerId: currentUser.id
         };
 
         const nextLeads = [capturedProspect, ...leads];
@@ -616,7 +616,7 @@ export default function App() {
 
       const accessToken = await getAccessToken();
       if (!accessToken) {
-        alert("Google Access Token unavailable or expired. Please re-authenticate via pop-up.");
+        alert("Google Access Token unavailable or expired. Please re-authenticate.");
         setIsScanningGmail(false);
         return;
       }
@@ -624,11 +624,11 @@ export default function App() {
       const res = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=5&q=is:unread label:INBOX", {
         headers: { Authorization: `Bearer ${accessToken}` }
       });
-      
+
       if (!res.ok) {
         throw new Error("Failed to contact Gmail API. Ensure scopes are allowed.");
       }
-      
+
       const data = await res.json();
       if (!data.messages || data.messages.length === 0) {
         showNotification("Workspace scan success: 0 unread inquiries in Inbox.");
@@ -643,7 +643,7 @@ export default function App() {
         });
         if (!detailRes.ok) continue;
         const detail = await detailRes.json();
-        
+
         const headers = detail.payload.headers;
         const fromVal = headers.find((h: any) => h.name.toLowerCase() === "from")?.value || "";
         const subVal = headers.find((h: any) => h.name.toLowerCase() === "subject")?.value || "";
@@ -658,40 +658,34 @@ export default function App() {
         }
 
         const leadId = `gmail-${msg.id}`;
-        if (leads.some(l => l.id === leadId)) continue; // Skip already captured threads
+        if (leads.some(l => l.id === leadId)) continue;
 
         count++;
         const aiDraft = await fetchAIResponse(snippet, parsedName);
         const timestampStr = new Date().toISOString();
-
         const autoSendActive = settings?.gmailAutomationToggle && settings?.gmailAutoSend;
 
-        const capturedProspect: Lead = {
+        await supabase.from('leads').insert({
           id: leadId,
-          source: "gmail",
+          source: 'gmail',
           name: parsedName,
           contact: parsedEmail,
-          status: autoSendActive ? "replied" : "new",
-          lastMessage: snippet || `Subject: ${subVal}`,
-          aiResponse: aiDraft,
-          createdAt: timestampStr,
-          updatedAt: timestampStr,
-          ownerId: currentUser.uid
-        };
-        await setDoc(doc(db, "leads", leadId), capturedProspect);
+          status: autoSendActive ? 'replied' : 'new',
+          last_message: snippet || `Subject: ${subVal}`,
+          ai_response: aiDraft,
+          owner_id: currentUser.id
+        });
 
         const logId = `log-g-${Date.now()}-${msg.id}`;
-        const autoLog: Log = {
+        await supabase.from('logs').insert({
           id: logId,
-          leadId,
+          lead_id: leadId,
           contact: parsedEmail,
-          channel: "gmail",
-          status: autoSendActive ? "success" : "pending",
+          channel: 'gmail',
+          status: autoSendActive ? 'success' : 'pending',
           message: aiDraft,
-          timestamp: timestampStr,
-          ownerId: currentUser.uid
-        };
-        await setDoc(doc(db, "logs", logId), autoLog);
+          owner_id: currentUser.id
+        });
       }
 
       if (count > 0) {
@@ -707,28 +701,38 @@ export default function App() {
     }
   };
 
-  // Save trained business rules
   const handleSaveSettings = async (updatedSettings: Setting) => {
     if (!currentUser) return;
-    if (currentUser.uid === "demo-user") {
+    if (currentUser.id === "demo-user") {
       setSettings(updatedSettings);
       localStorage.setItem("lead_agent_demo_settings", JSON.stringify(updatedSettings));
       return;
     }
-    await setDoc(doc(db, "settings", currentUser.uid), updatedSettings);
+
+    await supabase.from('settings').upsert({
+      id: currentUser.id,
+      company_name: updatedSettings.companyName,
+      company_description: updatedSettings.companyDescription,
+      agent_tone: updatedSettings.agentTone,
+      gmail_automation_toggle: updatedSettings.gmailAutomationToggle,
+      whatsapp_automation_toggle: updatedSettings.whatsappAutomationToggle,
+      gmail_auto_send: updatedSettings.gmailAutoSend,
+      whatsapp_auto_send: updatedSettings.whatsappAutoSend,
+      owner_id: currentUser.id
+    });
+
     setSettings(updatedSettings);
   };
 
-  // If loading or unauthenticated, display gorgeous modern portal gate
+  // Render auth gate
   if (needsAuth) {
     return (
-      <div 
-        id="gate-portal-view" 
+      <div
+        id="gate-portal-view"
         className="min-h-screen bg-[#0A0C10] flex items-center justify-center p-4 selection:bg-indigo-500 selection:text-white"
       >
         <div className="w-full max-w-md bg-[#161920] p-8 rounded-3xl border border-slate-800 shadow-2xl space-y-8 relative overflow-hidden transition-all">
-          
-          {/* Subtle graphic accent */}
+
           <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-red-500 via-indigo-600 to-emerald-500"></div>
 
           <div className="space-y-3 text-center">
@@ -753,14 +757,13 @@ export default function App() {
     );
   }
 
-  // Dashboard Application Framework
+  // Dashboard Application
   return (
     <div id="application-dashboard-root" className="min-h-screen bg-[#0A0C10] text-[#CBD5E1] font-sans selection:bg-indigo-500 selection:text-white pb-12">
-      
-      {/* Dynamic Notification Bubble */}
+
       {notification && (
-        <div 
-          id="global-toast-notification" 
+        <div
+          id="global-toast-notification"
           className="fixed bottom-5 right-5 z-50 bg-[#161920] text-slate-200 text-xs font-bold py-3.5 px-6 rounded-2xl border border-slate-700 shadow-2xl flex items-center gap-2 max-w-md animate-fade-in"
         >
           <Sparkles className="h-4 w-4 text-indigo-400 animate-pulse" />
@@ -768,11 +771,9 @@ export default function App() {
         </div>
       )}
 
-      {/* Main App Navigation Header */}
       <header className="sticky top-0 z-40 bg-[#0A0C10]/90 backdrop-blur-md border-b border-slate-800/80">
         <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          
-          {/* Brand Logo */}
+
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-md shadow-indigo-500/10">
               <Bot className="h-5 w-5" />
@@ -783,17 +784,16 @@ export default function App() {
             </div>
           </div>
 
-          {/* Connected User Badge */}
           <div className="flex items-center gap-4">
-            {currentUser?.uid === "demo-user" && (
+            {currentUser?.id === "demo-user" && (
               <span className="text-[10px] font-extrabold uppercase bg-amber-950/40 text-amber-400 border border-amber-900/40 px-2.5 py-1 rounded-full flex items-center gap-1">
                 <Sparkles className="h-3 w-3 animate-pulse text-amber-400" />
                 Sandbox Mode
               </span>
             )}
             <div className="hidden sm:flex flex-col items-end text-right">
-              <span className="text-xs font-bold text-white">{currentUser?.displayName || "Connected Client"}</span>
-              <span className="text-[10px] text-indigo-400 font-semibold">{currentUser?.email}</span>
+              <span className="text-xs font-bold text-white">{currentUser?.email || "Connected Client"}</span>
+              <span className="text-[10px] text-indigo-400 font-semibold">{currentUser?.id}</span>
             </div>
             <button
               onClick={handleLogout}
@@ -808,7 +808,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Hero Banner with Integrated Action Controls */}
       <div className="bg-gradient-to-b from-[#11141A] to-transparent py-8 border-b border-slate-800/60">
         <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-1">
@@ -824,7 +823,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* Quick Active Actions */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={scanGmailInbox}
@@ -846,10 +844,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* Main Body */}
       <main className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        
-        {/* Navigation Tabs bar */}
+
         <div className="flex border-b border-slate-800 mb-8 overflow-x-auto gap-6 font-semibold text-sm">
           <button
             onClick={() => setActiveTab("dashboard")}
@@ -881,13 +877,12 @@ export default function App() {
           </button>
         </div>
 
-        {/* Tab View Container */}
         <div className="space-y-10">
-          
+
           {activeTab === "dashboard" && (
             <div className="space-y-8 animate-fade-in">
               <DashboardStats leads={leads} logs={logs} />
-              
+
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2">
                   <LeadInbox

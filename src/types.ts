@@ -1,17 +1,17 @@
-export interface Lead {
+export type Lead = {
   id: string;
   source: "gmail" | "whatsapp";
   name: string;
   contact: string;
   status: "new" | "replied" | "converted" | "ignored";
   lastMessage: string;
-  aiResponse?: string;
+  aiResponse?: string | null;
   createdAt: string;
   updatedAt: string;
   ownerId: string;
-}
+};
 
-export interface Log {
+export type Log = {
   id: string;
   leadId: string;
   contact: string;
@@ -20,9 +20,9 @@ export interface Log {
   message: string;
   timestamp: string;
   ownerId: string;
-}
+};
 
-export interface Setting {
+export type Setting = {
   id: string;
   companyName: string;
   companyDescription: string;
@@ -32,4 +32,6 @@ export interface Setting {
   gmailAutoSend: boolean;
   whatsappAutoSend: boolean;
   ownerId: string;
-}
+  createdAt?: string;
+  updatedAt?: string;
+};
